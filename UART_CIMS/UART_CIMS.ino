@@ -1,8 +1,8 @@
 #include <WiFi.h>
 #include <MicroOcpp.h>
 //-----------------------------------------------------------
-#define STASSID "504 -2.4G"
-#define STAPSK "minhminh"
+#define STASSID "VTV3"
+#define STAPSK "01692459368"
 //-----------------------------------------------------------
 #define OCPP_BACKEND_URL "ws://192.168.1.116:8080/steve/websocket/CentralSystemService/"
 #define OCPP_CHARGE_BOX_ID "esp32-charger"
@@ -39,9 +39,11 @@ uint8_t internetStatus = 0x00;
 uint8_t cimsChargeStatus = 0x00;
 uint8_t hmiStatus = 0x00;
 uint8_t plcStatus = 0x00;
-uint8_t idTag = 0x00;
+uint8_t idTagState = 0x00;
 uint8_t slaveStatus[5];
 uint8_t connectorStatus[4];
+//-----------------------------------------------------------
+String idTag = "0123456789ABCD";
 //-----------------------------------------------------------
 void setup()
 {
@@ -92,9 +94,36 @@ void voltHandle(uint8_t buffer[8]) {
 }
 
 void hmiTranControl(uint8_t buffer[8]) {
+  if(!buffer[6]){
+    Serial.printf("HMI cancel transaction connector %d", buffer[5]);
+    if(getTransaction(buffer[5])){
+      endTransaction(idTag.c_str());
+    }
+  }
+  else {
+    Serial.printf("HMI start transaction connector %d", buffer[5]);
+    if (!getTransaction(buffer[5])) {
+      auto ret = beginTransaction(idTag.c_str());
   
+      if (ret) {
+        Serial.println(F("[main] Transaction initiated. OCPP lib will send a StartTransaction when"
+                         "ConnectorPlugged Input becomes true and if the Authorization succeeds"));
+      } else {
+        Serial.println(F("[main] No transaction initiated"));
+      } 
+    }
+
+  }
 }
 
+void connectorStHandle(uint8_t buffer[8]) {
+  if(buffer[6]){
+    setConnectorPluggedInput([]() {return true;},buffer[5]);
+  }
+  else {
+    setConnectorPluggedInput([]() {return false;},buffer[5]);
+  }
+}
 void process(uint8_t buffer[8])
 {
   switch (buffer[2])
@@ -118,9 +147,11 @@ void process(uint8_t buffer[8])
     case CONNECTOR_STATUS:
       connectorStatus[buffer[5]] = buffer[6];
       Serial.printf("Connector %d : %d\n", buffer[5], buffer[6]);
+      connectorStHandle(buffer);
       break;
     case HMI_CONTROL_TRANSACTION:
       // code relate OCPP library
+      hmiTranControl(buffer);
       break;
     case TRANSACTION_CONFIRMATION:
       // chưa biết cái này sinh ra làm gì
