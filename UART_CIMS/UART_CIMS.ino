@@ -42,6 +42,7 @@ uint8_t plcStatus = 0x00;
 uint8_t idTagState = 0x00;
 uint8_t slaveStatus[5];
 uint8_t connectorStatus[4];
+
 //-----------------------------------------------------------
 String idTag = "0123456789ABCD";
 float currentValue[4];
@@ -62,9 +63,24 @@ void setup()
   }
   Serial.println(F("Connected!"));
   mocpp_initialize(OCPP_BACKEND_URL, OCPP_CHARGE_BOX_ID, "Wallnut Charging Station New", "EVSE-iPAC-New");
+
   setOnSendConf("RemoteStopTransaction", [] (JsonObject payload) -> void {
-      serializeJson(payload, Serial);
+    int connectorID = payload["connectorId"];   
+    if (!strcmp(payload["status"], "Accepted")) {
+      uint8_t data[] = {END_TRANSACTION, 0x00, 0x00, 0x00, (uint8_t) connectorID};
+      sendData(data);
+    }  
   });
+
+
+  setOnSendConf("RemoteStartTransaction", [] (JsonObject payload) -> void {
+    int connectorID = payload["connectorId"];   
+    if (!strcmp(payload["status"], "Accepted")) {
+      uint8_t data[] = {BEGIN_TRANSACTION, 0x00, 0x00, 0x00, (uint8_t) connectorID};
+      sendData(data);
+    }    
+  });
+
   xTaskCreatePinnedToCore(
     OCPP_Server_handle, /* Task function. */
     "OCPP_Server",      /* name of task. */
@@ -89,27 +105,35 @@ void setup()
 void currentHandle(uint8_t buffer[8]) {
   int data = 0;
   data = buffer[3] | (buffer[4] << 8) | (buffer[5] << 16);
-  
+
   Serial.println(data);
   currentValue[buffer[6]] = float(data);
- //void addMeterValueInput(std::function<float ()> valueInput, const char *measurand = nullptr, const char *unit = nullptr, const char *location = nullptr, const char *phase = nullptr, unsigned int connectorId = 1)
-//  measurand giá trị đc đo
-//  unit đơn vị
-//  location địa điểm
-//  phase pha
+  //void addMeterValueInput(std::function<float ()> valueInput, const char *measurand = nullptr, const char *unit = nullptr, const char *location = nullptr, const char *phase = nullptr, unsigned int connectorId = 1)
+  //  measurand giá trị đc đo
+  //  unit đơn vị
+  //  location địa điểm
+  //  phase pha
   switch (buffer[6])
   {
     case 0:
-      addMeterValueInput([]() {return currentValue[0];}, nullptr,"A",nullptr, nullptr, 0); 
+      addMeterValueInput([]() {
+        return currentValue[0];
+      }, nullptr, "A", nullptr, nullptr, 0);
       break;
     case 1:
-      addMeterValueInput([]() {return currentValue[1];}, nullptr,"A",nullptr, nullptr, 1); 
+      addMeterValueInput([]() {
+        return currentValue[1];
+      }, nullptr, "A", nullptr, nullptr, 1);
       break;
     case 2:
-      addMeterValueInput([]() {return currentValue[2];}, nullptr,"A",nullptr, nullptr, 2); 
+      addMeterValueInput([]() {
+        return currentValue[2];
+      }, nullptr, "A", nullptr, nullptr, 2);
       break;
     case 3:
-      addMeterValueInput([]() {return currentValue[3];}, nullptr,"A",nullptr, nullptr, 3); 
+      addMeterValueInput([]() {
+        return currentValue[3];
+      }, nullptr, "A", nullptr, nullptr, 3);
       break;
   }
 
@@ -124,16 +148,24 @@ void voltHandle(uint8_t buffer[8]) {
   switch (buffer[6])
   {
     case 0:
-      addMeterValueInput([]() {return voltValue[0];}, nullptr,"V",nullptr, nullptr, 0); 
+      addMeterValueInput([]() {
+        return voltValue[0];
+      }, nullptr, "V", nullptr, nullptr, 0);
       break;
     case 1:
-      addMeterValueInput([]() {return voltValue[1];}, nullptr,"V",nullptr, nullptr, 1); 
+      addMeterValueInput([]() {
+        return voltValue[1];
+      }, nullptr, "V", nullptr, nullptr, 1);
       break;
     case 2:
-      addMeterValueInput([]() {return voltValue[2];}, nullptr,"V",nullptr, nullptr, 2); 
+      addMeterValueInput([]() {
+        return voltValue[2];
+      }, nullptr, "V", nullptr, nullptr, 2);
       break;
     case 3:
-      addMeterValueInput([]() {return voltValue[3];}, nullptr,"V",nullptr, nullptr, 3); 
+      addMeterValueInput([]() {
+        return voltValue[3];
+      }, nullptr, "V", nullptr, nullptr, 3);
       break;
   }
 }
@@ -141,9 +173,9 @@ void voltHandle(uint8_t buffer[8]) {
 //handle request start/end transaction from hmi 0x18
 void hmiTranControl(uint8_t buffer[8]) {
   uint8_t data[] = {uint8_t(TRANSACTION_CONFIRMATION), 0x01, 0x00, buffer[5], 0x01};;
-  if(!buffer[6]){
+  if (!buffer[6]) {
     Serial.printf("HMI cancel transaction connector %d", buffer[5]);
-    if(getTransaction(buffer[5])){
+    if (getTransaction(buffer[5])) {
       endTransaction(idTag.c_str());
       sendData(data); //ack
     }
@@ -157,30 +189,34 @@ void hmiTranControl(uint8_t buffer[8]) {
     Serial.printf("HMI start transaction connector %d", buffer[5]);
     if (!getTransaction(buffer[5])) {
       auto ret = beginTransaction(idTag.c_str());
-      
+
       if (ret) {
         Serial.println(F("[main] Transaction initiated. OCPP lib will send a StartTransaction when"
                          "ConnectorPlugged Input becomes true and if the Authorization succeeds"));
         data[2] = 0x00;
         data[4] = 0x01;
-        sendData(data); //ack            
+        sendData(data); //ack
       } else {
         Serial.println(F("[main] No transaction initiated"));
         data[2] = 0xFF;
         data[4] = 0x00;
-        sendData(data); //ack    
-      } 
+        sendData(data); //ack
+      }
     }
   }
 }
 
 //handle connector status change
 void connectorStHandle(uint8_t buffer[8]) {
-  if(buffer[6]){
-    setConnectorPluggedInput([]() {return true;},buffer[5]);
+  if (buffer[6]) {
+    setConnectorPluggedInput([]() {
+      return true;
+    }, buffer[5]);
   }
   else {
-    setConnectorPluggedInput([]() {return false;},buffer[5]);
+    setConnectorPluggedInput([]() {
+      return false;
+    }, buffer[5]);
   }
 }
 
