@@ -1,10 +1,10 @@
 #include <WiFi.h>
 #include <MicroOcpp.h>
 //-----------------------------------------------------------
-#define STASSID "wifi"
-#define STAPSK "pass"
+#define STASSID /*"EVSELab ThuyCao" "504 -2.4G"*/ "LingLing"
+#define STAPSK /*"EVSELab0111200" "minhminh"*/ "menhmonghoaha"
 //-----------------------------------------------------------
-#define OCPP_BACKEND_URL "ws://192.168.1.116:8080/steve/websocket/CentralSystemService/"
+#define OCPP_BACKEND_URL "ws://1.54.175.69:34589/steve/websocket/CentralSystemService/"
 #define OCPP_CHARGE_BOX_ID "esp32-charger-new"
 //-----------------------------------------------------------
 #define HEADER_HIGH 0xAB
@@ -52,7 +52,7 @@ void setup()
 {
   // Note the format for setting a serial port is as follows: Serial2.begin(baud-rate, protocol, RX pin, TX pin);
   Serial.begin(115200);
-  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
+  Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
   Serial.print(F("[main] Wait for WiFi: "));
 
   WiFi.begin(STASSID, STAPSK);
@@ -172,7 +172,7 @@ void voltHandle(uint8_t buffer[8]) {
 
 //handle request start/end transaction from hmi 0x18
 void hmiTranControl(uint8_t buffer[8]) {
-  uint8_t data[] = {uint8_t(TRANSACTION_CONFIRMATION), 0x01, 0x00, buffer[5], 0x01};;
+  uint8_t data[] = {uint8_t(TRANSACTION_CONFIRMATION), 0x01, 0x00, buffer[5], 0x01};
   if (!buffer[6]) {
     Serial.printf("HMI cancel transaction connector %d", buffer[5]);
     if (getTransaction(buffer[5])) {
