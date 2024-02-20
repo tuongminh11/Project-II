@@ -1,3 +1,7 @@
 test_board
 hercules_3-2-8.exe
-
+MicroOcpp/.pio
+MicroOcpp/.vscode/.browse.c_cpp.db*
+MicroOcpp/.vscode/c_cpp_properties.json
+MicroOcpp/.vscode/launch.json
+MicroOcpp/.vscode/ipch
