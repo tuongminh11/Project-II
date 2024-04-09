@@ -1,10 +1,13 @@
-#include <WiFi.h>
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <MicroOcpp.h>
+#include <SPI.h> //SPI communication
+#include <MFRC522.h> // RC522 module
+
 //-----------------------------------------------------------
-#define STASSID /*"EVSELab ThuyCao" "504 -2.4G"*/ "LingLing"
-#define STAPSK /*"EVSELab0111200" "minhminh"*/ "menhmonghoaha"
+#define RST       22  //RST pin in ESP32 module 30 pin
+#define SS_PIN    21  //SS  pin 
 //-----------------------------------------------------------
-#define OCPP_BACKEND_URL "ws://1.54.175.69:34589/steve/websocket/CentralSystemService/"
+#define OCPP_BACKEND_URL "ws://42.118.2.247:34589/steve/websocket/CentralSystemService/"
 #define OCPP_CHARGE_BOX_ID "esp32-charger-new"
 //-----------------------------------------------------------
 #define HEADER_HIGH 0xAB
@@ -30,6 +33,11 @@
 #define RXD2 16
 #define TXD2 17
 //-----------------------------------------------------------
+MFRC522 mfrc522(SS_PIN, RST); //class
+MFRC522::MIFARE_Key key;
+WiFiManager wm;
+WiFiManagerParameter custom_ocpp_server("server", "ocpp server", "", 40);
+//-----------------------------------------------------------
 TaskHandle_t OCPP_Server;
 TaskHandle_t CIMS;
 //-----------------------------------------------------------
@@ -44,7 +52,7 @@ uint8_t slaveStatus[5];
 uint8_t connectorStatus[4];
 
 //-----------------------------------------------------------
-String idTag = "0123456789ABCD";
+String idTag;
 float currentValue[4];
 float voltValue[4];
 //-----------------------------------------------------------
@@ -55,30 +63,42 @@ void setup()
   Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
   Serial.print(F("[main] Wait for WiFi: "));
 
-  WiFi.begin(STASSID, STAPSK);
-  while (!WiFi.isConnected())
-  {
-    Serial.print('.');
-    delay(1000);
+  for (byte i = 0; i < 6; i++) {
+    key.keyByte[i] = 0xFF;
   }
-  Serial.println(F("Connected!"));
+  SPI.begin();          // Init SPI bus
+  mfrc522.PCD_Init();    // Init MFRC522 (PCD is terminology
+  mfrc522.PCD_DumpVersionToSerial();  // Show details of PCD - MFRC522 Card Reader details
+
+  wm.addParameter(&custom_ocpp_server);
+  wm.setConfigPortalBlocking(false);
+  wm.setSaveParamsCallback(saveParamsCallback);
+
+  //automatically connect using saved credentials if they exist
+  //If connection fails it starts an access point with the specified name
+  if (wm.autoConnect("EVSE", "12345678")) {
+    Serial.println("Wifi connected");
+  }
+  else {
+    Serial.println("Configportal running");
+  }
   mocpp_initialize(OCPP_BACKEND_URL, OCPP_CHARGE_BOX_ID, "Wallnut Charging Station New", "EVSE-iPAC-New");
 
   setOnSendConf("RemoteStopTransaction", [] (JsonObject payload) -> void {
-    int connectorID = payload["connectorId"];   
+    int connectorID = payload["connectorId"];
     if (!strcmp(payload["status"], "Accepted")) {
       uint8_t data[] = {END_TRANSACTION, 0x00, 0x00, 0x00, (uint8_t) connectorID};
       sendData(data);
-    }  
+    }
   });
 
 
   setOnSendConf("RemoteStartTransaction", [] (JsonObject payload) -> void {
-    int connectorID = payload["connectorId"];   
+    int connectorID = payload["connectorId"];
     if (!strcmp(payload["status"], "Accepted")) {
       uint8_t data[] = {BEGIN_TRANSACTION, 0x00, 0x00, 0x00, (uint8_t) connectorID};
       sendData(data);
-    }    
+    }
   });
 
   xTaskCreatePinnedToCore(
@@ -99,6 +119,61 @@ void setup()
     &CIMS,       /* Task handle to keep track of created task */
     0);          /* pin task to core 1 */
   delay(500);
+}
+
+void readPICC() {
+  if ( ! mfrc522.PICC_IsNewCardPresent()) {
+    return;
+  }
+  // Select one of the cards
+  if ( ! mfrc522.PICC_ReadCardSerial()) {
+    return;
+  }
+  byte sector         = 1;
+  byte blockAddr      = 4;
+  byte trailerBlock   = 7;
+  MFRC522::StatusCode status;
+  byte buffer[18];
+  byte size = sizeof(buffer);
+  status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("PCD_Authenticate() failed: "));
+    Serial.println(mfrc522.GetStatusCodeName(status));
+    return;
+  }
+  status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, buffer, &size);
+  if (status != MFRC522::STATUS_OK) {
+    Serial.print(F("MIFARE_Read() failed: "));
+    Serial.println(mfrc522.GetStatusCodeName(status));
+  }
+  idTag = (char *)buffer;
+  uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
+  authorize(idTag.c_str(),[] (JsonObject payload) -> void {
+    JsonObject idTagInfo = payload["idTagInfo"];
+    if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) {
+      idTagState = 0;
+      Serial.println("authorize reject");
+      sendData(data);
+    }
+    else {
+      idTagState = 1;
+      Serial.println("authorize success");
+      data[4] = 1;
+      sendData(data);
+    }
+  },nullptr,nullptr,nullptr);
+
+  // Halt PICC
+  mfrc522.PICC_HaltA();
+  // Stop encryption on PCD
+  mfrc522.PCD_StopCrypto1();
+}
+
+void saveParamsCallback () {
+  Serial.println("Get Params:");
+  Serial.print(custom_ocpp_server.getID());
+  Serial.print(" : ");
+  Serial.println(custom_ocpp_server.getValue());
 }
 
 //send data current to server
@@ -287,7 +362,11 @@ void OCPP_Server_handle(void *pvParameters)
 {
   for (;;)
   {
-    mocpp_loop();
+    wm.process();
+    if (WiFi.status() == WL_CONNECTED){
+      readPICC();
+      mocpp_loop();
+    }
     vTaskDelay(1);
   }
 }
