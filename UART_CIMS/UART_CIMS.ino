@@ -147,15 +147,16 @@ void readPICC() {
     Serial.println(mfrc522.GetStatusCodeName(status));
   }
   idTag = (char *)buffer;
-  uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
   authorize(idTag.c_str(),[] (JsonObject payload) -> void {
     JsonObject idTagInfo = payload["idTagInfo"];
     if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) {
+      uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
       idTagState = 0;
       Serial.println("authorize reject");
       sendData(data);
     }
     else {
+      uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
       idTagState = 1;
       Serial.println("authorize success");
       data[4] = 1;
