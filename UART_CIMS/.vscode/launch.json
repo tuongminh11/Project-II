@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "e:/Work/Lab/Code/UART_CIMS",
-      "program": "e:/Work/Lab/Code/UART_CIMS/build/Debug/outDebug",
+      "cwd": "e:/documentOfW/4/project2/Project-II/UART_CIMS",
+      "program": "e:/documentOfW/4/project2/Project-II/UART_CIMS/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

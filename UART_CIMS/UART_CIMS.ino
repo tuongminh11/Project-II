@@ -1,5 +1,5 @@
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
-#include <MicroOcpp.h>
+#include <WiFiManager.h> // wifi manager
+#include <MicroOcpp.h> //OCPP library
 #include <SPI.h> //SPI communication
 #include <MFRC522.h> // RC522 module
 
@@ -7,12 +7,24 @@
 #define RST       22  //RST pin in ESP32 module 30 pin
 #define SS_PIN    21  //SS  pin 
 //-----------------------------------------------------------
-#define OCPP_BACKEND_URL "ws://42.118.2.247:34589/steve/websocket/CentralSystemService/"
-#define OCPP_CHARGE_BOX_ID "esp32-charger-new"
+#define OCPP_BACKEND_URL "ws://42.118.3.87:34589/steve/websocket/CentralSystemService/" //URL to server OCPP
+#define OCPP_CHARGE_BOX_ID "esp32-charger-new" //device ID in server, need declare in server before, unique
 //-----------------------------------------------------------
-#define HEADER_HIGH 0xAB
+/**
+ * Frame structure
+ * byte |   0   |   1   |   2   |   3   |   4   |   5   |   6   |   7   |
+ * ------------------------------------------------------------------
+ * mean |  HH   |   HL  |  ID   |  D0   |   D1  |   D2  |   D3  | checksum|
+ * 
+ * HH: HEADER_HIGH
+ * HL: HEADER_LOW
+ * ID: ID of frame (meaning of frame)
+ * 
+ */
+#define HEADER_HIGH 0xAB //header byte of communication frame
 #define HEADER_LOW 0xCD
 //-----------------------------------------------------------
+//Frame ID
 #define INTERNET_STATUS 0x11
 #define CIMS_CHARGE_STATUS 0x12
 #define HMI_STATUS 0x13
@@ -30,19 +42,20 @@
 #define CURRENT_VALUE 0x20
 #define VOLT_VALUE 0x21
 //-----------------------------------------------------------
+//UART 2 comunicatino to CIMS
 #define RXD2 16
 #define TXD2 17
 //-----------------------------------------------------------
-MFRC522 mfrc522(SS_PIN, RST); //class
+MFRC522 mfrc522(SS_PIN, RST); //class RFID reader
 MFRC522::MIFARE_Key key;
 WiFiManager wm;
 WiFiManagerParameter custom_ocpp_server("server", "ocpp server", "", 40);
 //-----------------------------------------------------------
+// Declare task
 TaskHandle_t OCPP_Server;
 TaskHandle_t CIMS;
 //-----------------------------------------------------------
-
-//-----------------------------------------------------------
+// Variable save temporary state of system
 uint8_t internetStatus = 0x00;
 uint8_t cimsChargeStatus = 0x00;
 uint8_t hmiStatus = 0x00;
@@ -50,12 +63,11 @@ uint8_t plcStatus = 0x00;
 uint8_t idTagState = 0x00;
 uint8_t slaveStatus[5];
 uint8_t connectorStatus[4];
-
-//-----------------------------------------------------------
 String idTag;
 float currentValue[4];
 float voltValue[4];
 //-----------------------------------------------------------
+
 void setup()
 {
   // Note the format for setting a serial port is as follows: Serial2.begin(baud-rate, protocol, RX pin, TX pin);
@@ -63,6 +75,7 @@ void setup()
   Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
   Serial.print(F("[main] Wait for WiFi: "));
 
+  //init RFID reader
   for (byte i = 0; i < 6; i++) {
     key.keyByte[i] = 0xFF;
   }
@@ -70,10 +83,10 @@ void setup()
   mfrc522.PCD_Init();    // Init MFRC522 (PCD is terminology
   mfrc522.PCD_DumpVersionToSerial();  // Show details of PCD - MFRC522 Card Reader details
 
+  //init and config wifi manager
   wm.addParameter(&custom_ocpp_server);
   wm.setConfigPortalBlocking(false);
   wm.setSaveParamsCallback(saveParamsCallback);
-
   //automatically connect using saved credentials if they exist
   //If connection fails it starts an access point with the specified name
   if (wm.autoConnect("EVSE", "12345678")) {
@@ -82,20 +95,22 @@ void setup()
   else {
     Serial.println("Configportal running");
   }
+
+  //init and config OCPP
   mocpp_initialize(OCPP_BACKEND_URL, OCPP_CHARGE_BOX_ID, "Wallnut Charging Station New", "EVSE-iPAC-New");
 
+  //handle json object confirm from EVSE to server 
   setOnSendConf("RemoteStopTransaction", [] (JsonObject payload) -> void {
     int connectorID = payload["connectorId"];
-    if (!strcmp(payload["status"], "Accepted")) {
+    if (!strcmp(payload["status"], "Accepted")) { //send to CIMS
       uint8_t data[] = {END_TRANSACTION, 0x00, 0x00, 0x00, (uint8_t) connectorID};
       sendData(data);
     }
   });
 
-
   setOnSendConf("RemoteStartTransaction", [] (JsonObject payload) -> void {
     int connectorID = payload["connectorId"];
-    if (!strcmp(payload["status"], "Accepted")) {
+    if (!strcmp(payload["status"], "Accepted")) { //send to CIMS
       uint8_t data[] = {BEGIN_TRANSACTION, 0x00, 0x00, 0x00, (uint8_t) connectorID};
       sendData(data);
     }
@@ -121,6 +136,11 @@ void setup()
   delay(500);
 }
 
+/*
+ * Handle RFID card 
+ * If EVSE is not logged in -> authorization to OCPP and response to user
+ * Else -> notify logged in
+*/
 void readPICC() {
   if ( ! mfrc522.PICC_IsNewCardPresent()) {
     return;
@@ -135,41 +155,49 @@ void readPICC() {
   MFRC522::StatusCode status;
   byte buffer[18];
   byte size = sizeof(buffer);
+
   status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("PCD_Authenticate() failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
     return;
   }
+
   status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, buffer, &size);
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("MIFARE_Read() failed: "));
     Serial.println(mfrc522.GetStatusCodeName(status));
   }
+
   idTag = (char *)buffer;
-  authorize(idTag.c_str(),[] (JsonObject payload) -> void {
-    JsonObject idTagInfo = payload["idTagInfo"];
-    if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) {
-      uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
-      idTagState = 0;
-      Serial.println("authorize reject");
-      sendData(data);
-    }
-    else {
-      uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
-      idTagState = 1;
-      Serial.println("authorize success");
-      data[4] = 1;
-      sendData(data);
-    }
-  },nullptr,nullptr,nullptr);
+  if (!idTagState) {
+    authorize(idTag.c_str(), [] (JsonObject payload) -> void {
+      JsonObject idTagInfo = payload["idTagInfo"];
+      if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) {
+        uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
+        idTagState = 0;
+        Serial.println("authorize reject");
+        sendData(data);
+      }
+      else {
+        uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
+        idTagState = 1;
+        Serial.println("authorize success");
+        data[4] = 1;
+        sendData(data);
+      }
+    }, nullptr, nullptr, nullptr);
+  }
+  else Serial.println("you are logged in");
+
 
   // Halt PICC
   mfrc522.PICC_HaltA();
-  // Stop encryption on PCD
+  // Stop encryption on PCD prepare to next read
   mfrc522.PCD_StopCrypto1();
 }
 
+//Handle when new params set in config portal
 void saveParamsCallback () {
   Serial.println("Get Params:");
   Serial.print(custom_ocpp_server.getID());
@@ -178,17 +206,21 @@ void saveParamsCallback () {
 }
 
 //send data current to server
+// big endian
 void currentHandle(uint8_t buffer[8]) {
   int data = 0;
   data = buffer[3] | (buffer[4] << 8) | (buffer[5] << 16);
 
   Serial.println(data);
   currentValue[buffer[6]] = float(data);
-  //void addMeterValueInput(std::function<float ()> valueInput, const char *measurand = nullptr, const char *unit = nullptr, const char *location = nullptr, const char *phase = nullptr, unsigned int connectorId = 1)
-  //  measurand giá trị đc đo
-  //  unit đơn vị
-  //  location địa điểm
-  //  phase pha
+  /*
+  * void addMeterValueInput(std::function<float ()> valueInput, 
+  * const char *measurand = nullptr, 
+  * const char *unit = nullptr, 
+  * const char *location = nullptr, 
+  * const char *phase = nullptr, 
+  * unsigned int connectorId = 1)
+  */
   switch (buffer[6])
   {
     case 0:
@@ -216,6 +248,7 @@ void currentHandle(uint8_t buffer[8]) {
 }
 
 //send data voltage to server
+//big endian
 void voltHandle(uint8_t buffer[8]) {
   int data = 0;
   data = buffer[3] | (buffer[4] << 8) | (buffer[5] << 16);
@@ -253,12 +286,12 @@ void hmiTranControl(uint8_t buffer[8]) {
     Serial.printf("HMI cancel transaction connector %d", buffer[5]);
     if (getTransaction(buffer[5])) {
       endTransaction(idTag.c_str());
-      sendData(data); //ack
+      //sendData(data); //ack
     }
     else {
       data[2] = 0xFF;
       data[4] = 0x00;
-      sendData(data); //ack
+      //sendData(data); //ack
     }
   }
   else {
@@ -271,12 +304,12 @@ void hmiTranControl(uint8_t buffer[8]) {
                          "ConnectorPlugged Input becomes true and if the Authorization succeeds"));
         data[2] = 0x00;
         data[4] = 0x01;
-        sendData(data); //ack
+        //sendData(data); //ack
       } else {
         Serial.println(F("[main] No transaction initiated"));
         data[2] = 0xFF;
         data[4] = 0x00;
-        sendData(data); //ack
+        //sendData(data); //ack
       }
     }
   }
@@ -364,10 +397,8 @@ void OCPP_Server_handle(void *pvParameters)
   for (;;)
   {
     wm.process();
-    if (WiFi.status() == WL_CONNECTED){
-      readPICC();
-      mocpp_loop();
-    }
+    readPICC();
+    mocpp_loop();
     vTaskDelay(1);
   }
 }
