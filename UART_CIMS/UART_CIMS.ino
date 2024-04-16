@@ -285,31 +285,31 @@ void hmiTranControl(uint8_t buffer[8]) {
   if (!buffer[6]) {
     Serial.printf("HMI cancel transaction connector %d", buffer[5]);
     if (getTransaction(buffer[5])) {
-      endTransaction(idTag.c_str());
-      //sendData(data); //ack
+      endTransaction(idTag.c_str(), nullptr, buffer[5]);
+      sendData(data); //ack
     }
     else {
       data[2] = 0xFF;
       data[4] = 0x00;
-      //sendData(data); //ack
+      sendData(data); //ack
     }
   }
   else {
     Serial.printf("HMI start transaction connector %d", buffer[5]);
     if (!getTransaction(buffer[5])) {
-      auto ret = beginTransaction(idTag.c_str());
+      auto ret = beginTransaction(idTag.c_str(), buffer[5]);
 
       if (ret) {
         Serial.println(F("[main] Transaction initiated. OCPP lib will send a StartTransaction when"
                          "ConnectorPlugged Input becomes true and if the Authorization succeeds"));
         data[2] = 0x00;
         data[4] = 0x01;
-        //sendData(data); //ack
+        sendData(data); //ack
       } else {
         Serial.println(F("[main] No transaction initiated"));
         data[2] = 0xFF;
         data[4] = 0x00;
-        //sendData(data); //ack
+        sendData(data); //ack
       }
     }
   }
