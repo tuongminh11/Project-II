@@ -173,14 +173,14 @@ void readPICC() {
   if (!idTagState) {
     authorize(idTag.c_str(), [] (JsonObject payload) -> void {
       JsonObject idTagInfo = payload["idTagInfo"];
-      if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) {
+      if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) { //strcmp == 0 mean equal
         uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
         idTagState = 0;
         Serial.println("authorize reject");
         sendData(data);
       }
       else {
-        uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
+        uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x01};
         idTagState = 1;
         Serial.println("authorize success");
         data[4] = 1;
@@ -365,6 +365,13 @@ void process(uint8_t buffer[8])
     case VOLT_VALUE:
       // code relate OCPP library
       voltHandle(buffer);
+      break;
+    case ID_TAG:
+      idTagState = buffer[6];
+      if(!idTagState) {
+        idTag = "";
+        Serial.println("Logout...")
+      }
       break;
     default:
       break;
