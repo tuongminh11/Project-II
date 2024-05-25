@@ -65,6 +65,11 @@ uint8_t connectorStatus[4];
 float currentValue[4];
 float voltValue[4];
 //-----------------------------------------------------------
+struct User {
+  char idTag[IDTAG_LEN_MAX + 1];
+  uint8_t connectorID;
+};
+struct User userDB[2] = { { "", 255 }, { "", 255 } };
 uint8_t isAuth = 0x00;
 String idTag;
 //-----------------------------------------------------------
@@ -170,28 +175,74 @@ void readPICC() {
     Serial.println(mfrc522.GetStatusCodeName(status));
   }
 
-  idTag = (char *)buffer;
-  if (!isAuth) {
-    authorize(idTag.c_str(), [] (JsonObject payload) -> void {
+  if(!isAuth){
+    //check if user is full
+    if(userDB[0].connectorID != 255 && userDB[1].connectorID != 255){
+      Serial.println("All connectors are busy.");
+      return;
+    }
+    idTag = (char *)buffer;
+    //check if this is exist user
+    uint8_t data[] = {uint8_t(ID_TAG), 0x00, 0x00, 0x00, 0x01};
+    if(strcmp(idTag.c_str(), userDB[0].idTag) == 0){
+      //hanlde
+      authorize(idTag.c_str(), [] (JsonObject payload) -> void {
       JsonObject idTagInfo = payload["idTagInfo"];
       if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) { //strcmp == 0 mean equal
-        uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
         isAuth = 0;
         Serial.println("authorize reject");
-        sendData(data);
       }
       else {
-        uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x01};
         isAuth = 1;
         Serial.println("authorize success");
+        data[3] = userDB[0].connectorID;
         data[4] = 1;
         sendData(data);
       }
     }, nullptr, nullptr, nullptr);
+    }
+    else if (strcmp(idTag.c_str(), userDB[1].idTag) == 0){
+      //hanlde
+      authorize(idTag.c_str(), [] (JsonObject payload) -> void {
+      JsonObject idTagInfo = payload["idTagInfo"];
+      if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) { //strcmp == 0 mean equal
+        isAuth = 0;
+        Serial.println("authorize reject");
+      }
+      else {
+        isAuth = 1;
+        Serial.println("authorize success");
+        data[3] = userDB[1].connectorID;
+        data[4] = 1;
+        sendData(data);
+      }
+    }, nullptr, nullptr, nullptr);
+    }
+    //add new user
+    else {
+      if(userDB[0].connectorID == 255){
+        //hanlde
+        memcpy(userDB[0].idTag, idTag.c_str(), idTag.length() + 1);
+        isAuth = 1;
+        Serial.println("authorize user 1 success");
+        data[3] = userDB[0].connectorID;
+        data[4] = 1;
+        sendData(data);
+      }
+      else {
+        //hanlde
+        memcpy(userDB[1].idTag, idTag.c_str(), idTag.length() + 1);
+        isAuth = 1;
+        Serial.println("authorize user 1 success");
+        data[3] = userDB[1].connectorID;
+        data[4] = 1;
+        sendData(data);
+      }
+    }
   }
-  else Serial.println("you are logged in");
-
-
+  else {
+    Serial.println("Already logged in");
+  }
   // Halt PICC
   mfrc522.PICC_HaltA();
   // Stop encryption on PCD prepare to next read
@@ -370,7 +421,19 @@ void process(uint8_t buffer[8])
     case ID_TAG:
       isAuth = buffer[6];
       if(!isAuth) {
-        idTag = "";
+        idTag = ""; //reset current ID tag in station
+        isAuth = 0; //set state no authentication
+        if(/*check if have in a transaction*/!getTransaction(buffer[5])) { //clear user db if not in a transaction and have logout signal
+          if(userDB[0].connectorId == buffer[5]) {
+            userDB[0].idTag = '\0';
+          }
+          else if (userDB[1].connectorId == buffer[5]) {
+            userDB[1].idTag = '\0';
+          }
+          else {
+            Serial.println("Logout error...");
+          }
+        }
         Serial.println("Logout...")
       }
       break;
