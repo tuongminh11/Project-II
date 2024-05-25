@@ -60,12 +60,13 @@ uint8_t internetStatus = 0x00;
 uint8_t cimsChargeStatus = 0x00;
 uint8_t hmiStatus = 0x00;
 uint8_t plcStatus = 0x00;
-uint8_t idTagState = 0x00;
 uint8_t slaveStatus[5];
 uint8_t connectorStatus[4];
-String idTag;
 float currentValue[4];
 float voltValue[4];
+//-----------------------------------------------------------
+uint8_t isAuth = 0x00;
+String idTag;
 //-----------------------------------------------------------
 
 void setup()
@@ -170,18 +171,18 @@ void readPICC() {
   }
 
   idTag = (char *)buffer;
-  if (!idTagState) {
+  if (!isAuth) {
     authorize(idTag.c_str(), [] (JsonObject payload) -> void {
       JsonObject idTagInfo = payload["idTagInfo"];
       if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) { //strcmp == 0 mean equal
         uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x00};
-        idTagState = 0;
+        isAuth = 0;
         Serial.println("authorize reject");
         sendData(data);
       }
       else {
         uint8_t data[] = {uint8_t(ID_TAG), 0x01, 0x00, 0x00, 0x01};
-        idTagState = 1;
+        isAuth = 1;
         Serial.println("authorize success");
         data[4] = 1;
         sendData(data);
@@ -367,8 +368,8 @@ void process(uint8_t buffer[8])
       voltHandle(buffer);
       break;
     case ID_TAG:
-      idTagState = buffer[6];
-      if(!idTagState) {
+      isAuth = buffer[6];
+      if(!isAuth) {
         idTag = "";
         Serial.println("Logout...")
       }
