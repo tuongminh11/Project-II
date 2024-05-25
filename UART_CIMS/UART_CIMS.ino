@@ -373,6 +373,12 @@ void connectorStHandle(uint8_t buffer[8]) {
     setConnectorPluggedInput([]() {
       return true;
     }, buffer[5]);
+    if(strcmp(idTag.c_str(), userDB[0].idTag) == 0){
+      userDB[0].connectorID = buffer[5];
+    }
+    else if(strcmp(idTag.c_str(), userDB[1].idTag) == 0){
+      userDB[1].connectorID = buffer[5];
+    }
   }
   else {
     setConnectorPluggedInput([]() {
