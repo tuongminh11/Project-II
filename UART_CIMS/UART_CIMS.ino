@@ -426,9 +426,11 @@ void process(uint8_t buffer[8])
         if(/*check if have in a transaction*/!getTransaction(buffer[5])) { //clear user db if not in a transaction and have logout signal
           if(userDB[0].connectorId == buffer[5]) {
             userDB[0].idTag = '\0';
+            userDB[0].connectorId = 255;
           }
           else if (userDB[1].connectorId == buffer[5]) {
             userDB[1].idTag = '\0';
+            userDB[1].connectorId = 255;
           }
           else {
             Serial.println("Logout error...");
