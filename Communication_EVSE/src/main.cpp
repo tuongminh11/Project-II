@@ -1,15 +1,20 @@
-#include <WiFiManager.h> // wifi manager
+// #include <WiFiManager.h> // wifi manager
+#include <WiFi.h>
 #include <MicroOcpp.h> //OCPP library
 #include <SPI.h> //SPI communication
 #include <MFRC522.h> // RC522 module
+#include <Arduino.h>
 //-----------------------------------------------------------
 #define TRIGGER_PIN 23
+#define STASSID "W403"
+#define STAPSK "kamekamehahaha"
 //-----------------------------------------------------------
 #define RST       22  //RST pin in ESP32 module 30 pin
 #define SS_PIN    21  //SS  pin 
 //-----------------------------------------------------------
 #define OCPP_CHARGE_BOX_ID "esp32-charger-new" //device ID in server, need declare in server before, unique
-String OCPP_BACKEND_URL;
+// String OCPP_BACKEND_URL;
+#define OCPP_BACKEND_URL "ws://42.112.89.125:34589/steve/websocket/CentralSystemService/" //URL
 //-----------------------------------------------------------
 /**
  * Frame structure
@@ -49,8 +54,8 @@ String OCPP_BACKEND_URL;
 //-----------------------------------------------------------
 MFRC522 mfrc522(SS_PIN, RST); //class RFID reader
 MFRC522::MIFARE_Key key;
-WiFiManager wm;
-WiFiManagerParameter custom_ocpp_server("server", "ocpp server", "", 40);
+// WiFiManager wm;
+// WiFiManagerParameter custom_ocpp_server("server", "ocpp server", "", 40);
 //-----------------------------------------------------------
 // Declare task
 TaskHandle_t OCPP_Server;
@@ -62,9 +67,9 @@ uint8_t cimsChargeStatus = 0x00;
 uint8_t hmiStatus = 0x00;
 uint8_t plcStatus = 0x00;
 uint8_t slaveStatus[5];
-uint8_t connectorStatus[4];
-float currentValue[4];
-float voltValue[4];
+uint8_t connectorStatus[2];
+float currentValue[2];
+float voltValue[2];
 //-----------------------------------------------------------
 struct User {
   char idTag[IDTAG_LEN_MAX + 1];
@@ -75,6 +80,10 @@ uint8_t isAuth = 0x00;
 String idTag;
 //-----------------------------------------------------------
 
+void saveParamsCallback();
+void OCPP_Server_handle(void *pvParameters);
+void CIMS_handle(void *pvParameters);
+void sendData(uint8_t data[5]);
 void setup()
 {
   // Note the format for setting a serial port is as follows: Serial2.begin(baud-rate, protocol, RX pin, TX pin);
@@ -91,20 +100,28 @@ void setup()
   mfrc522.PCD_DumpVersionToSerial();  // Show details of PCD - MFRC522 Card Reader details
 
   //init and config wifi manager
-  wm.addParameter(&custom_ocpp_server);
-  wm.setConfigPortalBlocking(false);
-  wm.setSaveParamsCallback(saveParamsCallback);
+  // wm.addParameter(&custom_ocpp_server);
+  // wm.setConfigPortalBlocking(false);
+  // wm.setSaveParamsCallback(saveParamsCallback);
   //automatically connect using saved credentials if they exist
   //If connection fails it starts an access point with the specified name
-  if (wm.autoConnect("EVSE", "12345678")) {
-    Serial.println("Wifi connected");
+  // if (wm.autoConnect("EVSE", "12345678")) {
+  //   Serial.println(F("Wifi connected"));
+  // }
+  // else {
+  //   Serial.println(F("Configportal running"));
+  // }
+
+  //wait for WiFi connection  
+  WiFi.begin(STASSID, STAPSK);
+  while (!WiFi.isConnected())
+  {
+    Serial.print('.');
+    delay(1000);
   }
-  else {
-    Serial.println("Configportal running");
-  }
-  
+  Serial.println(F("Connected!"));
   //init and config OCPP
-  mocpp_initialize(OCPP_BACKEND_URL.c_str(), OCPP_CHARGE_BOX_ID, "Wallnut Charging Station New", "EVSE-iPAC-New");
+  mocpp_initialize(OCPP_BACKEND_URL, OCPP_CHARGE_BOX_ID, "Wallnut Charging Station New", "EVSE-iPAC-New");
 
   //handle json object confirm from EVSE to server 
   setOnSendConf("RemoteStopTransaction", [] (JsonObject payload) -> void {
@@ -126,7 +143,7 @@ void setup()
   xTaskCreatePinnedToCore(
     OCPP_Server_handle, /* Task function. */
     "OCPP_Server",      /* name of task. */
-    10000,              /* Stack size of task */
+    5000,              /* Stack size of task */
     NULL,               /* parameter of the task */
     1,                  /* priority of the task */
     &OCPP_Server,       /* Task handle to keep track of created task */
@@ -135,45 +152,45 @@ void setup()
   xTaskCreatePinnedToCore(
     CIMS_handle, /* Task function. */
     "CIMS",      /* name of task. */
-    10000,       /* Stack size of task */
+    5000,       /* Stack size of task */
     NULL,        /* parameter of the task */
     1,           /* priority of the task */
     &CIMS,       /* Task handle to keep track of created task */
-    0);          /* pin task to core 1 */
+    1);          /* pin task to core 1 */
   delay(500);
 }
 
-//void checkButton(){
+// void checkButton(){
 //  // check for button press
 //  if ( digitalRead(TRIGGER_PIN) == LOW ) {
 //    // poor mans debounce/press-hold, code not ideal for production
 //    delay(50);
 //    if( digitalRead(TRIGGER_PIN) == LOW ){
-//      Serial.println("Button Pressed");
+//      Serial.println(F("Button Pressed"));
 //      // still holding button for 3000 ms, reset settings, code not ideaa for production
 //      delay(3000); // reset delay hold
 //      if( digitalRead(TRIGGER_PIN) == LOW ){
-//        Serial.println("Button Held");
-//        Serial.println("Erasing Config, restarting");
+//        Serial.println(F("Button Held"));
+//        Serial.println(F("Erasing Config, restarting"));
 //        wm.resetSettings();
 //        ESP.restart();
 //      }
-//      
+     
 //      // start portal w delay
-//      Serial.println("Starting config portal");
+//      Serial.println(F("Starting config portal"));
 //      wm.setConfigPortalTimeout(120);
-//      
+     
 //      if (!wm.startConfigPortal("OnDemandAP","password")) {
-//        Serial.println("failed to connect or hit timeout");
+//        Serial.println(F("failed to connect or hit timeout"));
 //        delay(3000);
 //        // ESP.restart();
 //      } else {
 //        //if you get here you have connected to the WiFi
-//        Serial.println("connected...yeey :)");
+//        Serial.println(F("connected...yeey :)"));
 //      }
 //    }
 //  }
-//}
+// }
 
 /*
  * Handle RFID card 
@@ -198,20 +215,20 @@ void readPICC() {
   status = (MFRC522::StatusCode) mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, trailerBlock, &key, &(mfrc522.uid));
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("PCD_Authenticate() failed: "));
-    Serial.println(mfrc522.GetStatusCodeName(status));
+    Serial.println(F(mfrc522.GetStatusCodeName(status)));
     return;
   }
 
   status = (MFRC522::StatusCode) mfrc522.MIFARE_Read(blockAddr, buffer, &size);
   if (status != MFRC522::STATUS_OK) {
     Serial.print(F("MIFARE_Read() failed: "));
-    Serial.println(mfrc522.GetStatusCodeName(status));
+    Serial.println(F(mfrc522.GetStatusCodeName(status)));
   }
 
   if(!isAuth){
     //check if user is full
     if(userDB[0].connectorID != 255 && userDB[1].connectorID != 255){
-      Serial.println("All connectors are busy.");
+      Serial.println(F("All connectors are busy."));
       return;
     }
     idTag = (char *)buffer;
@@ -224,11 +241,11 @@ void readPICC() {
       uint8_t data[] = {uint8_t(ID_TAG), 0x00, 0x00, 0x00, 0x01};
       if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) { //strcmp == 0 mean equal
         isAuth = 0;
-        Serial.println("authorize reject");
+        Serial.println(F("authorize reject"));
       }
       else {
         isAuth = 1;
-        Serial.println("authorize success");
+        Serial.println(F("authorize success"));
         data[3] = userDB[0].connectorID;
         data[4] = 1;
         sendData(data);
@@ -242,11 +259,11 @@ void readPICC() {
       uint8_t data[] = {uint8_t(ID_TAG), 0x00, 0x00, 0x00, 0x01};
       if (strcmp("Accepted", idTagInfo["status"] | "UNDEFINED")) { //strcmp == 0 mean equal
         isAuth = 0;
-        Serial.println("authorize reject");
+        Serial.println(F("authorize reject"));
       }
       else {
         isAuth = 1;
-        Serial.println("authorize success");
+        Serial.println(F("authorize success"));
         data[3] = userDB[1].connectorID;
         data[4] = 1;
         sendData(data);
@@ -259,7 +276,7 @@ void readPICC() {
         //hanlde
         memcpy(userDB[0].idTag, idTag.c_str(), idTag.length() + 1);
         isAuth = 1;
-        Serial.println("authorize user 1 success");
+        Serial.println(F("authorize user 1 success"));
         data[3] = userDB[0].connectorID;
         data[4] = 1;
         sendData(data);
@@ -268,7 +285,7 @@ void readPICC() {
         //hanlde
         memcpy(userDB[1].idTag, idTag.c_str(), idTag.length() + 1);
         isAuth = 1;
-        Serial.println("authorize user 1 success");
+        Serial.println(F("authorize user 1 success"));
         data[3] = userDB[1].connectorID;
         data[4] = 1;
         sendData(data);
@@ -276,7 +293,7 @@ void readPICC() {
     }
   }
   else {
-    Serial.println("Already logged in");
+    Serial.println(F("Already logged in"));
   }
   // Halt PICC
   mfrc522.PICC_HaltA();
@@ -285,13 +302,13 @@ void readPICC() {
 }
 
 //Handle when new params set in config portal
-void saveParamsCallback () {
-  Serial.println("Get Params:");
-  Serial.print(custom_ocpp_server.getID());
-  Serial.print(" : ");
-  OCPP_BACKEND_URL = "ws://" + String(custom_ocpp_server.getValue()) + ":34589/steve/websocket/CentralSystemService/";
-  Serial.println(custom_ocpp_server.getValue());
-}
+// void saveParamsCallback () {
+//   Serial.println(F("Get Params:"));
+//   Serial.print(custom_ocpp_server.getID());
+//   Serial.print(" : ");
+//   OCPP_BACKEND_URL = "ws://" + String(custom_ocpp_server.getValue()) + ":34589/steve/websocket/CentralSystemService/";
+//   Serial.println(F(custom_ocpp_server.getValue()));
+// }
 
 //send data current to server
 // big endian
@@ -299,7 +316,7 @@ void currentHandle(uint8_t buffer[8]) {
   int data = 0;
   data = buffer[3] | (buffer[4] << 8) | (buffer[5] << 16);
 
-  Serial.println(data);
+  Serial.println(F(data));
   currentValue[buffer[6]] = float(data);
   /*
   * void addMeterValueInput(std::function<float ()> valueInput, 
@@ -340,7 +357,7 @@ void currentHandle(uint8_t buffer[8]) {
 void voltHandle(uint8_t buffer[8]) {
   int data = 0;
   data = buffer[3] | (buffer[4] << 8) | (buffer[5] << 16);
-  Serial.println(data);
+  Serial.println(F(data));
   voltValue[buffer[6]] = float(data);
   switch (buffer[6])
   {
@@ -475,10 +492,10 @@ void process(uint8_t buffer[8])
             userDB[1].connectorID = 255;
           }
           else {
-            Serial.println("Logout error...");
+            Serial.println(F("Logout error..."));
           }
         }
-        Serial.println("Logout...");
+        Serial.println(F("Logout..."));
       }
       break;
     default:
@@ -511,7 +528,7 @@ void OCPP_Server_handle(void *pvParameters)
 {
   for (;;)
   {
-    wm.process();
+    // wm.process();
     readPICC();
     mocpp_loop();
     vTaskDelay(1);
